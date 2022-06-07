@@ -21,7 +21,7 @@
 #define HEAD_X  14
 #define STATUS_HEIGHT 10
 
-// Interactive keys
+// Interactive keyss
 #define UP_KEY   'w'
 #define DOWN_KEY  's'
 #define RIGHT_KEY  'd'
@@ -30,6 +30,9 @@
 #define DOWNSPEED_KEY 'q'
 #define GAIN_INC_KEY 't'
 #define GAIN_DEC_KEY 'g'
+#define CODE_PHASE_RATE_INC_KEY 'c'
+#define CODE_PHASE_RATE_DEC_KEY 'v'
+
 
 typedef enum {
     TRACK = 0,
@@ -44,7 +47,9 @@ typedef enum {
     EPHEMERIS,
     TOP,
     STATUS,
-    HELP
+    SERIAL,
+    HELP,
+    GPS_STATUS
 } window_panel_t;
 
 typedef enum {
@@ -66,6 +71,9 @@ int gui_getch(void);
 void gui_destroy(void);
 void gui_mvwprintw(window_panel_t w, int y, int x, const char * fmt, ...);
 void gui_status_wprintw(status_color_t clr, const char * fmt, ...);
+void gui_gps_status_wprintw(status_color_t clr, const char * fmt, ...);
+
+
 void gui_colorpair(window_panel_t w, unsigned clr, attr_status_t onoff);
 void gui_top_panel(window_panel_t p);
 void gui_toggle_current_panel(void);

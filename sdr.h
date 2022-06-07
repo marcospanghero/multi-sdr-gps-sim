@@ -18,7 +18,7 @@
 #define TX_FREQUENCY 1575420000
 #define FREQ_ONE_MHZ (1000000ull)
 // 3 MHz is generated in Pluto SDR with integer dividers being multiple of 2
-#define TX_SAMPLERATE 3000000
+#define TX_SAMPLERATE 2000000
 #define TX_BW (TX_SAMPLERATE * 2)
 
 #define NUM_FIFO_BUFFERS 8
@@ -31,7 +31,9 @@
 // HackRF transfer buffer size
 // Fixed to 4 * 8192 = 262144 bytes
 // Defined in libhackrf, hackrf.c
-#define HACKRF_TRANSFER_BUFFER_SIZE 262144
+#define HACKRF_LIME_TRANSFER_BUFFER_SIZE 262144
+#define LIME_SDR_TRANSFER_BUFFER_SIZE 262144
+
 
 int sdr_init(simulator_t *simulator);
 void sdr_close(void);

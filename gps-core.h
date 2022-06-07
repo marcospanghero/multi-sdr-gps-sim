@@ -19,13 +19,14 @@
 /* Real-time signal generation */
 #define REAL_TIME_GPS
 
-#define RINEX2_FILE_NAME "rinex2.gz"
+#define RINEX2_FILE_NAME "brdc2.gz"
 #define RINEX3_FILE_NAME "rinex3.gz"
-#define RINEX_FTP_URL "ftp://igs.bkg.bund.de/IGS/"
+#define RINEX_FTP_URL "https://cddis.nasa.gov/archive/gnss/data/daily/"
 #define RINEX2_SUBFOLDER "nrt"
 #define RINEX3_SUBFOLDER "nrt_v3"
-#define RINEX_FTP_FILE "%s/%03i/%02i/%4s%03i%c.%02in.gz"
-
+//#define RINEX_FTP_FILE "%s/%03i/%02i/%4s%03i%c.%02in.gz"
+#define RINEX_NASA "https://cddis.nasa.gov/archive/gnss/data/daily/%04i/%03i/22n/brdc%03i0.22n.gz"
+#define RINEX_FTP_FILE "%s/%04i/%03i/%02in/brdc%03i0.%02in.gz"
 /* Maximum length of a line in a text file (RINEX, motion) */
 #define MAX_CHAR (100)
 
@@ -33,7 +34,7 @@
 #define MAX_SAT (32)
 
 /* Maximum number of channels we simulate */
-#define MAX_CHAN (12)
+#define MAX_CHAN (32)
 
 /* Maximum number of user motion points */
 #ifndef REAL_TIME_GPS
@@ -132,6 +133,8 @@
  * with valid parity. (IS-GPS-200L, p.111, 20.3.3.5.1.2)
  */
 #define EMPTY_WORD 0xaaaaaaaaUL 
+
+
 
 /* Structure representing GPS time */
 typedef struct {
@@ -235,14 +238,12 @@ typedef struct {
     range_t rho0;
 } channel_t;
 
-/* Structure represending a single GPS monitoring station. */
-typedef struct {
-    const char *id_v2;
-    const char *id_v3;
-    const char *name;
-} stations_t;
 
+
+void *gps_thread_external_receiver(void *arg);
 void *gps_thread_ep(void *arg);
-
+void gps2date(const gpstime_t *g, datetime_t *t);
+void date2gps(const datetime_t *t, gpstime_t *g);
+double subGpsTime(gpstime_t g1, gpstime_t g0);
 #endif /* GPS_H */
 

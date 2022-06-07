@@ -14,6 +14,7 @@
 #include "sdr_hackrf.h"
 #include "sdr_iqfile.h"
 #include "sdr_pluto.h"
+#include "sdr_lime.h"
 #include "sdr.h"
 
 static int no_init(void);
@@ -42,6 +43,11 @@ static sdr_handler sdr_handlers[] = {
 #ifdef ENABLE_PLUTOSDR
     { sdr_pluto_init, sdr_pluto_close, sdr_pluto_run, sdr_pluto_set_gain, "plutosdr", SDR_PLUTOSDR},
 #endif
+
+#ifdef ENABLE_LIMESDR
+    { sdr_limesdr_init, sdr_limesdr_close, sdr_limesdr_run, sdr_limesdr_set_gain, "limesdr", SDR_LIME},
+#endif
+
     { NULL, NULL, NULL, NULL, NULL, SDR_NONE} /* must come last */
 };
 

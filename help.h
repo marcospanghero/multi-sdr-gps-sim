@@ -24,6 +24,7 @@ static struct argp_option options[] = {
     {"geo-loc", 'l', "location", 0, "Latitude, Longitude, Height (static mode) e.g. 35.681298,139.766247,10.0", 1},
     {"start", 's', "date,time", 0, "Scenario start time YYYY/MM/DD,hh:mm:ss (use 'now' for actual time)", 1},
     {"disable-iono", 'I', 0, 0, "Disable ionospheric delay for spacecraft scenario", 1},
+    {"external", 'E', 0, 0, "Use external receiver", 1},
     {"verbose", 'v', 0, 0, "Show verbose output and details about simulated channels", 1},
     {"interactive", 'i', 0, 0, "Use interactive mode", 1},
     {"amplifier", 'a', 0, 0, "Enable TX amplifier (default OFF)", 1},
@@ -31,6 +32,8 @@ static struct argp_option options[] = {
     {"duration", 'd', "seconds", 0, "Duration in seconds", 1},
     {"target", 't', "distance,bearing,height", 0, "Target distance [m], bearing [°] and height [m]", 1},
     {"ppb", 'p', "ppb", 0, "Set oscillator error in ppb (default 0)", 1},
+    {"crate", 'C', "crate", 0, "Set time rate in s/s that you want to drift the clock by (default 0)", 1},
+    {"cdir", 'D', "+1/-1", 0, "Direction of clock change: positive clock, negative clock rewinds", 0},
     {"rinex3", '3', 0, 0, "Use RINEX v3 navigation data format", 1},
     {"radio", 'r', "name", 0, "Set the SDR device type name (default none)", 1},
     {"iq16", 700, 0, 0, "Set IQ sample size to 16 bit (default 8 bit)", 1},
@@ -49,6 +52,9 @@ static struct argp_option options[] = {
 #ifdef ENABLE_PLUTOSDR
     {0, 0, 0, OPTION_DOC, "   plutosdr", 3},
 #endif    
+#ifdef ENABLE_LIMESDR
+    {0, 0, 0, OPTION_DOC, "   limesdr", 3},
+#endif   
     { 0}
 };
 

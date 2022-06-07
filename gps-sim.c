@@ -14,17 +14,31 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <sched.h>
-#include <fcntl.h> 
+#include <fcntl.h>
 #include <unistd.h>
-#include <sys/stat.h> 
-#include <sys/types.h> 
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/time.h>
 #include "help.h"
 #include "gui.h"
 #include "sdr.h"
 #include "gps-sim.h"
+#include "serial.h"
+#include "gps-core.h"
+#include <time.h>
+
+#define UNUSED(x) (void)(x)
 
 simulator_t simulator;
+
+timer_t timerId = 0;
+struct sigevent sev = {0};
+struct sigaction sa = {0};
+
+struct itimerspec its = {.it_value.tv_sec = 6,
+                         .it_value.tv_nsec = 0,
+                         .it_interval.tv_sec = 0,
+                         .it_interval.tv_nsec = 0};
 
 static error_t parse_opt(int key, char *arg, struct argp_state *state);
 const char *argp_program_version = "v1.0";
@@ -32,161 +46,244 @@ const char args_doc[] = "";
 const char doc[] = "gps-sim generates a GPS L1 baseband signal IQ data stream, which is then transmitted by a software-defined radio (SDR) platform.";
 static struct argp argp = {options, parse_opt, args_doc, doc, NULL, NULL, NULL};
 
-static error_t parse_opt(int key, char *arg, struct argp_state *state) {
-    double d = 0.0;
+void sig_handler_sync(int signum)
+{
+    // Return type of the handler function should be void
+    if (simulator.pre_synchronizer == false)
+    {
+        simulator.pre_synchronizer = true;
+        timer_settime(timerId, 0, &its, NULL);
+    }
+    signal(SIGUSR1, sig_handler_sync); // Register signal handler
+}
 
-    switch (key) {
-        case 'e':
-            if (arg == NULL) {
-                return ARGP_ERR_UNKNOWN;
-            }
-            simulator.nav_file_name = strdup(arg);
-            break;
-        case 'r':
-            if (arg == NULL) {
-                return ARGP_ERR_UNKNOWN;
-            }
-            simulator.sdr_name = strdup(arg);
-            break;
-        case 'U':
-            if (arg == NULL) {
-                return ARGP_ERR_UNKNOWN;
-            }
-            simulator.pluto_uri = strdup(arg);
-            break;
-        case 'N':
-            if (arg == NULL) {
-                return ARGP_ERR_UNKNOWN;
-            }
-            simulator.pluto_hostname = strdup(arg);
-            break;
-        case 'm':
-            if (arg == NULL) {
-                return ARGP_ERR_UNKNOWN;
-            }
-            simulator.motion_file_name = strdup(arg);
-            simulator.interactive_mode = false;
-            break;
-        case 701: // --station
-            if (arg == NULL) {
-                return ARGP_ERR_UNKNOWN;
-            }
-            simulator.station_id = strndup(arg, 9);
-            break;
-        case 'f':
-            simulator.use_ftp = true;
-            break;
-        case 'l':
-            if (arg == NULL) {
-                return ARGP_ERR_UNKNOWN;
-            }
-            sscanf(arg, "%lf,%lf,%lf", &simulator.location.lat, &simulator.location.lon, &simulator.location.height);
-            break;
-        case 's':
-            if (arg == NULL) {
-                return ARGP_ERR_UNKNOWN;
-            }
-            if (strncmp(arg, "now", 3) == 0) {
-                simulator.time_overwrite = true;
-                time_t timer;
-                struct tm *gmt;
+static void
+handler(int sig, siginfo_t *si, void *uc)
+{
+    UNUSED(si);
+    UNUSED(uc);
+    simulator.synchronizer = true;
+}
 
-                time(&timer);
-                gmt = gmtime(&timer);
-
-                simulator.start.y = gmt->tm_year + 1900;
-                simulator.start.m = gmt->tm_mon + 1;
-                simulator.start.d = gmt->tm_mday;
-                simulator.start.hh = gmt->tm_hour;
-                simulator.start.mm = gmt->tm_min;
-                simulator.start.sec = (double) gmt->tm_sec;
-            } else {
-                sscanf(arg, "%d/%d/%d,%d:%d:%lf", &simulator.start.y, &simulator.start.m, &simulator.start.d, &simulator.start.hh, &simulator.start.mm, &simulator.start.sec);
-            }
-            if (simulator.start.y <= 1980 ||
-                    simulator.start.m < 1 || simulator.start.m > 12 ||
-                    simulator.start.d < 1 || simulator.start.d > 31 ||
-                    simulator.start.hh < 0 || simulator.start.hh > 23 ||
-                    simulator.start.mm < 0 || simulator.start.mm > 59 ||
-                    simulator.start.sec < 0.0 || simulator.start.sec >= 60.0) {
-                fprintf(stderr, "ERROR: Invalid date and time.\n");
-                return ARGP_ERR_UNKNOWN;
-            }
-            break;
-        case 'I':
-            simulator.ionosphere_enable = false;
-            break;
-        case 'v':
-            simulator.show_verbose = true;
-            break;
-        case 'a':
-            simulator.enable_tx_amp = true;
-            break;
-        case 'g':
-            if (arg == NULL) {
-                return ARGP_ERR_UNKNOWN;
-            }
-            simulator.tx_gain = (int) strtoul(arg, NULL, 10);
-            break;
-        case 'd':
-            if (arg == NULL) {
-                return ARGP_ERR_UNKNOWN;
-            }
-            d = atof(arg);
-            if (d < 0.0 || d > ((double) USER_MOTION_SIZE) / 10.0) {
-                gui_status_wprintw(RED, "Error: Invalid duration.\n");
-                return -1;
-            }
-            simulator.duration = (int) (d * 10.0 + 0.5);
-            break;
-        case 't':
-            if (arg == NULL) {
-                return ARGP_ERR_UNKNOWN;
-            }
-            simulator.target.valid = true;
-            sscanf(arg, "%lf,%lf,%lf", &simulator.target.distance, &simulator.target.bearing, &simulator.target.height);
-            simulator.target.bearing *= 1000;
-            break;
-        case 'i':
-            simulator.interactive_mode = true;
-            break;
-        case '3':
-            simulator.use_rinex3 = true;
-            break;
-        case 'p':
-            if (arg == NULL) {
-                return ARGP_ERR_UNKNOWN;
-            }
-            simulator.ppb = atoi(arg);
-            break;
-        case 700: // --iq16
-            simulator.sample_size = SC16;
-            break;
-        case 702: // --disable-almanac
-            simulator.almanac_enable = false;
-            break;
-        case ARGP_KEY_END:
-            if (state->arg_num > 0)
-                /* We use only options but no arguments */
-                argp_usage(state);
-            break;
-        default:
+static error_t parse_opt(int key, char *arg, struct argp_state *state)
+{
+    switch (key)
+    {
+    case 'e':
+        if (arg == NULL)
+        {
             return ARGP_ERR_UNKNOWN;
+        }
+        simulator.nav_file_name = strdup(arg);
+        break;
+    case 'C':
+        if (arg == NULL)
+        {
+            return ARGP_ERR_UNKNOWN;
+        }
+        simulator.target.drift_rate = (double)strtod(arg, NULL);
+        gui_status_wprintw(GREEN, "clock rate: %lf.\n", simulator.target.drift_rate);
+
+        break;
+    case 'D':
+        if (arg == NULL)
+        {
+            return ARGP_ERR_UNKNOWN;
+        }
+        int d = atoi(arg);
+        if (abs(d) > 1 || d == 0)
+        {
+            return ARGP_ERR_UNKNOWN;
+        }
+        else
+        {
+            simulator.target.drift_sign = d;
+            gui_status_wprintw(GREEN, "clock direction: %d.\n", simulator.target.drift_sign);
+        }
+
+        break;
+    case 'r':
+        if (arg == NULL)
+        {
+            return ARGP_ERR_UNKNOWN;
+        }
+        simulator.sdr_name = strdup(arg);
+        break;
+    case 'U':
+        if (arg == NULL)
+        {
+            return ARGP_ERR_UNKNOWN;
+        }
+        simulator.pluto_uri = strdup(arg);
+        break;
+    case 'N':
+        if (arg == NULL)
+        {
+            return ARGP_ERR_UNKNOWN;
+        }
+        simulator.pluto_hostname = strdup(arg);
+        break;
+    case 'm':
+        if (arg == NULL)
+        {
+            return ARGP_ERR_UNKNOWN;
+        }
+        simulator.motion_file_name = strdup(arg);
+        simulator.interactive_mode = false;
+        break;
+    case 701: // --station
+        if (arg == NULL)
+        {
+            return ARGP_ERR_UNKNOWN;
+        }
+        simulator.station_id = strndup(arg, 9);
+        break;
+    case 'f':
+        simulator.use_ftp = true;
+        break;
+    case 'l':
+        if (arg == NULL)
+        {
+            return ARGP_ERR_UNKNOWN;
+        }
+        sscanf(arg, "%lf,%lf,%lf", &simulator.location.lat, &simulator.location.lon, &simulator.location.height);
+        break;
+    case 's':
+        if (arg == NULL)
+        {
+            return ARGP_ERR_UNKNOWN;
+        }
+        if (strncmp(arg, "now", 3) == 0)
+        {
+            simulator.time_overwrite = true;
+            time_t timer;
+            struct tm *gmt;
+
+            time(&timer);
+            gmt = gmtime(&timer);
+
+            simulator.start.y = gmt->tm_year + 1900;
+            simulator.start.m = gmt->tm_mon + 1;
+            simulator.start.d = gmt->tm_mday;
+            simulator.start.hh = gmt->tm_hour;
+            simulator.start.mm = gmt->tm_min;
+            simulator.start.sec = (double)gmt->tm_sec - 10;
+            simulator.start_set = true;
+        }
+        else
+        {
+            sscanf(arg, "%d/%d/%d,%d:%d:%lf", &simulator.start.y, &simulator.start.m, &simulator.start.d, &simulator.start.hh, &simulator.start.mm, &simulator.start.sec);
+            simulator.start_set = true;
+        }
+        if (simulator.start.y <= 1980 ||
+            simulator.start.m < 1 || simulator.start.m > 12 ||
+            simulator.start.d < 1 || simulator.start.d > 31 ||
+            simulator.start.hh < 0 || simulator.start.hh > 23 ||
+            simulator.start.mm < 0 || simulator.start.mm > 59 ||
+            simulator.start.sec < 0.0 || simulator.start.sec >= 60.0)
+        {
+            fprintf(stderr, "ERROR: Invalid date and time.\n");
+            return ARGP_ERR_UNKNOWN;
+        }
+        break;
+    case 'I':
+        simulator.ionosphere_enable = false;
+        break;
+    case 'v':
+        simulator.show_verbose = true;
+        break;
+    case 'a':
+        simulator.enable_tx_amp = true;
+        break;
+    case 'g':
+        if (arg == NULL)
+        {
+            return ARGP_ERR_UNKNOWN;
+        }
+        simulator.tx_gain = (int)strtoul(arg, NULL, 10);
+        break;
+    case 'd':
+        if (arg == NULL)
+        {
+            return ARGP_ERR_UNKNOWN;
+        }
+        d = atof(arg);
+        if (d < 0.0 || d > ((double)USER_MOTION_SIZE) / 10.0)
+        {
+            return -1;
+        }
+        simulator.duration = (int)(d * 10.0 + 0.5);
+        break;
+    case 't':
+        if (arg == NULL)
+        {
+            return ARGP_ERR_UNKNOWN;
+        }
+        simulator.target.valid = true;
+        sscanf(arg, "%lf,%lf,%lf", &simulator.target.distance, &simulator.target.bearing, &simulator.target.height);
+        simulator.target.bearing *= 1000;
+        break;
+    case 'i':
+        simulator.interactive_mode = true;
+        break;
+    case '3':
+        simulator.use_rinex3 = true;
+        break;
+    case 'p':
+        if (arg == NULL)
+        {
+            return ARGP_ERR_UNKNOWN;
+        }
+        simulator.ppb = atoi(arg);
+        break;
+    case 'E':
+        simulator.external = true;
+        simulator.time_overwrite = true;
+        sev.sigev_notify = SIGEV_SIGNAL; // Linux-specific
+        sev.sigev_signo = SIGRTMIN;
+        timer_create(CLOCK_REALTIME, &sev, &timerId);
+        sa.sa_flags = SA_SIGINFO;
+        sa.sa_sigaction = handler;
+        sigemptyset(&sa.sa_mask);
+        if (sigaction(SIGRTMIN, &sa, NULL) == -1)
+        {
+            fprintf(stderr, "Error sigaction: %s\n", strerror(errno));
+            exit(-1);
+        }
+        break;
+    case 700: // --iq16
+        simulator.sample_size = SC16;
+        break;
+    case 702: // --disable-almanac
+        simulator.almanac_enable = false;
+        break;
+    case ARGP_KEY_END:
+        if (state->arg_num > 0)
+            /* We use only options but no arguments */
+            argp_usage(state);
+        break;
+    default:
+        return ARGP_ERR_UNKNOWN;
     }
     return 0;
 }
 
-static void simulator_init(void) {
+static void simulator_init(void)
+{
     simulator.main_exit = false;
     simulator.show_verbose = false;
     simulator.ionosphere_enable = true;
     simulator.gps_thread_running = false;
+    simulator.gps_serial_thread_running = false;
     simulator.interactive_mode = false;
     simulator.use_ftp = false;
     simulator.enable_tx_amp = false;
     simulator.use_rinex3 = false;
     simulator.time_overwrite = false;
     simulator.almanac_enable = true;
+    simulator.synchronizer = false;
+    simulator.pre_synchronizer = false;
+    simulator.start_set = false;
     simulator.duration = USER_MOTION_SIZE;
     simulator.tx_gain = 0;
     simulator.ppb = 0;
@@ -199,6 +296,8 @@ static void simulator_init(void) {
     simulator.target.lon = 0;
     simulator.target.height = 0;
     simulator.target.valid = false;
+    simulator.target.drift_rate = 0.0;
+    simulator.target.drift_sign = 0;
     simulator.nav_file_name = NULL;
     simulator.sdr_name = NULL;
     simulator.pluto_hostname = NULL;
@@ -207,22 +306,37 @@ static void simulator_init(void) {
     simulator.station_id = NULL;
     simulator.sdr_type = SDR_NONE;
     simulator.sample_size = SC08;
+    simulator.external = false;
+    simulator.external_data_ready = false;
+    gps_clear_fix(&simulator.fixdata);
     pthread_cond_init(&simulator.gps_init_done, NULL);
     pthread_mutex_init(&simulator.gps_lock, NULL);
+    pthread_cond_init(&simulator.gps_serial_init_done, NULL);
+    pthread_mutex_init(&simulator.gps_serial_lock, NULL);
 }
 
-static void signal_handler(int sig) {
+static void signal_handler(int sig)
+{
     signal(sig, SIG_DFL); // Reset signal handler
     simulator.main_exit = true;
     gui_status_wprintw(RED, "Caught signal %s, shutting down\n", strsignal(sig));
 }
 
-static void cleanup_and_exit(int code) {
+static void cleanup_and_exit(int code)
+{
     simulator.gps_thread_exit = true;
+    simulator.gps_serial_thread_exit = true;
     pthread_join(simulator.gps_thread, NULL); /* Wait on GPS read thread exit */
 
     pthread_cond_destroy(&simulator.gps_init_done);
     pthread_mutex_destroy(&simulator.gps_lock);
+
+    if (simulator.external)
+    {
+        pthread_cond_destroy(&simulator.gps_serial_init_done);
+        pthread_mutex_destroy(&simulator.gps_serial_lock);
+        pthread_join(simulator.gps_serial_thread, NULL); /* Wait on GPS read thread exit */
+    }
 
     /* Free when pointing to string in heap (strdup allocated when given as run option) */
     free(simulator.nav_file_name);
@@ -238,7 +352,8 @@ static void cleanup_and_exit(int code) {
 }
 
 /* Set trhead name if supported. */
-void set_thread_name(const char *name) {
+void set_thread_name(const char *name)
+{
 #if (__GLIBC__ > 2) || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 12)
     pthread_setname_np(pthread_self(), name);
 #else
@@ -248,7 +363,8 @@ void set_thread_name(const char *name) {
 
 // Set affinity of calling thread to specific core on a multi-core CPU
 
-int thread_to_core(int core_id) {
+int thread_to_core(int core_id)
+{
     int num_cores = sysconf(_SC_NPROCESSORS_ONLN);
     if (core_id < 0 || core_id >= num_cores)
         return EINVAL;
@@ -258,22 +374,29 @@ int thread_to_core(int core_id) {
     CPU_SET(core_id, &cpuset);
 
     pthread_t current_thread = pthread_self();
-    return pthread_setaffinity_np(current_thread, sizeof (cpu_set_t), &cpuset);
+    return pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
 }
 
 /*
- * 
+ *
  */
-int main(int argc, char** argv) {
+int main(int argc, char **argv)
+{
     int ch = 0;
     bool is_info_shown = false;
     bool is_help_shown = false;
+
+    // TEMP
+    const double delt = 1.0 / (double)TX_SAMPLERATE;
 
     // signal handlers:
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     signal(SIGABRT, signal_handler);
+    signal(SIGUSR1, sig_handler_sync); // Register signal handler for synchronizer
 
+    // Register the main thread pid
+    simulator.main_thread = getpid();
     // Initialize all simulator variables
     simulator_init();
     /* On a multi-core CPU we run the main thread and reader thread on different cores.
@@ -281,20 +404,22 @@ int main(int argc, char** argv) {
      */
     thread_to_core(1);
     set_thread_name("simulator-thread");
-
     // Parse the command line options
-    if (argp_parse(&argp, argc, argv, 0, 0, 0)) {
+    if (argp_parse(&argp, argc, argv, 0, 0, 0))
+    {
         return (EXIT_FAILURE);
     }
 
-    if (simulator.nav_file_name == NULL && simulator.use_ftp == false) {
+    if (simulator.nav_file_name == NULL && simulator.use_ftp == false)
+    {
         fprintf(stderr, "Error: GPS ephemeris file is not specified\n");
         return (EXIT_FAILURE);
     }
-    gui_init();
     // No access to GUI until this point
+    gui_init();
 
-    if (simulator.interactive_mode && simulator.motion_file_name != NULL) {
+    if (simulator.interactive_mode && simulator.motion_file_name != NULL)
+    {
         simulator.interactive_mode = false;
         simulator.target.valid = false;
         gui_status_wprintw(YELLOW, "User motion file supplied. Interactive mode disabled!\n");
@@ -304,12 +429,51 @@ int main(int argc, char** argv) {
     struct timespec timeout;
     struct timeval now;
     gettimeofday(&now, NULL);
-    timeout.tv_sec = now.tv_sec + 30;
+    timeout.tv_sec = now.tv_sec + 45;
     timeout.tv_nsec = 0;
 
     // Init prior GPS thread, creates FIFO.
-    if (sdr_init(&simulator) == 0) {
+    if (sdr_init(&simulator) == 0)
+    {
         // Start GPS baseband signal generation
+        /* If external, start the external ubx reference receiver sampler */
+        if (simulator.external)
+        {
+            gui_status_wprintw(GREEN, "Use External receiver.\n");
+            pthread_create(&simulator.gps_serial_thread, NULL, gps_serial_thread_ep, &simulator);
+            pthread_mutex_lock(&(simulator.gps_serial_lock));
+            int ret = pthread_cond_timedwait(&(simulator.gps_serial_init_done), &(simulator.gps_serial_lock), &timeout);
+            pthread_mutex_unlock(&(simulator.gps_serial_lock));
+            if (ret == ETIMEDOUT)
+            {
+                gui_status_wprintw(RED, "Time out waiting for External GPS thread. Running?\n");
+            }
+            gps_mask_t subset_observation = GPSTIME_SET | ONLINE_SET | LATLON_SET;
+            while (subset_observation != (simulator.mask & subset_observation))
+            {
+                // wait
+            }
+            gui_status_wprintw(GREEN, "External Fix mode: %d\n", simulator.fixdata.mode);
+            gui_status_wprintw(YELLOW, "Wait for synchronizer \n");
+            gui_status_wprintw(GREEN, "Done for pre synchronizer\n");
+            while (simulator.pre_synchronizer == false);
+
+            simulator.location.lat = simulator.fixdata.latitude;
+            simulator.location.lon = simulator.fixdata.longitude;
+            simulator.location.height = simulator.fixdata.altHAE;
+            simulator.location.start.week = simulator.fixdata.gps_time_weekn;
+            simulator.location.start.sec = simulator.fixdata.gps_time_itow; //compensate the wait time: about 6 seconds from when we obtain the pre_sync
+            gps2date(&simulator.location.start, &simulator.start);
+            simulator.external_data_ready = true;
+            clock_gettime(CLOCK_MONOTONIC, &simulator.compensation);
+
+            gui_status_wprintw(GREEN, "First signal time: %d.%d\n", simulator.compensation.tv_sec, simulator.compensation.tv_nsec);
+            gui_status_wprintw(GREEN, "%4d/%02d/%02d,%02d:%02d:%02.0f (%d:%.0f)",
+                               simulator.start.y, simulator.start.m, simulator.start.d, simulator.start.hh, simulator.start.mm, simulator.start.sec, simulator.location.start.week, simulator.location.start.sec);
+            gui_status_wprintw(GREEN, "Target: %f - %f -%f\n", simulator.location.lat, simulator.location.lon, simulator.location.height); /*WAIT until we have a proper external set fix*/
+            gui_status_wprintw(GREEN, "Target Time: %d - %d\n", simulator.fixdata.gps_time_weekn, simulator.fixdata.gps_time_itow);
+        }
+
         gui_top_panel(LS_FIX);
         pthread_create(&simulator.gps_thread, NULL, gps_thread_ep, &simulator);
 
@@ -317,98 +481,123 @@ int main(int argc, char** argv) {
         int ret = pthread_cond_timedwait(&(simulator.gps_init_done), &(simulator.gps_lock), &timeout);
         pthread_mutex_unlock(&(simulator.gps_lock));
 
-        if (ret == ETIMEDOUT) {
+        if (ret == ETIMEDOUT)
+        {
             gui_status_wprintw(RED, "Time out waiting for GPS thread. Running?\n");
         }
 
-        if (!simulator.gps_thread_exit) {
-            if (sdr_run() != 0) {
+        if (!simulator.gps_thread_exit)
+        {
+            if (sdr_run() != 0)
+            {
                 gui_status_wprintw(RED, "Starting SDR streaming failed.\n");
                 simulator.gps_thread_exit = true;
             }
         }
     }
+    else
+    {
+        gui_status_wprintw(RED, "We fucked up somewhere....");
+    }
     // Run this until we get a termination signal.
-    while (!simulator.main_exit) {
+    while (!simulator.main_exit)
+    {
         ch = gui_getch();
-        if (ch != -1) {
-            switch (ch) {
-                case 'x':
-                case 'X':
-                    simulator.main_exit = true;
-                    break;
-                case 'i':
-                case 'I':
-                    gui_show_panel(INFO, ON);
-                    is_info_shown = true;
-                    break;
-                case '?':
-                case 'h':
-                case 'H':
-                    gui_show_panel(HELP, ON);
-                    is_help_shown = true;
-                    break;
-                case 9: // TAB
-                    gui_toggle_current_panel();
-                    break;
-                case 265: // F1
-                    gui_top_panel(TRACK);
-                    break;
-                case 266: // F2
-                    gui_top_panel(LS_FIX);
-                    break;
-                case 267: // F3
-                    gui_top_panel(KF_FIX);
-                    break;
-                case LEFT_KEY:
-                    simulator.target.bearing -= 127.0;
-                    if (simulator.target.bearing < 0) simulator.target.bearing = 360000.0;
-                    if (simulator.target.bearing > 360000) simulator.target.bearing = 0;
-                    gui_show_heading((float) (simulator.target.bearing / 1000));
-                    break;
-                case RIGHT_KEY:
-                    simulator.target.bearing += 127.0;
-                    if (simulator.target.bearing < 0) simulator.target.bearing = 360000.0;
-                    if (simulator.target.bearing > 360000) simulator.target.bearing = 0;
-                    gui_show_heading((float) (simulator.target.bearing / 1000));
-                    break;
-                case UP_KEY:
-                    simulator.target.vertical_speed += 1;
-                    gui_show_vertical_speed((float) simulator.target.vertical_speed);
-                    break;
-                case DOWN_KEY:
-                    simulator.target.vertical_speed -= 1;
-                    gui_show_vertical_speed((float) simulator.target.vertical_speed);
-                    break;
-                case UPSPEED_KEY:
-                    simulator.target.speed += 1.0;
-                    simulator.target.velocity = simulator.target.speed / 100.0;
-                    gui_show_speed((float) (simulator.target.velocity * 3.6));
-                    break;
-                case DOWNSPEED_KEY:
-                    simulator.target.speed -= 1.0;
-                    if (simulator.target.speed < 0) simulator.target.speed = 0;
-                    simulator.target.velocity = simulator.target.speed / 100.0;
-                    gui_show_speed((float) (simulator.target.velocity * 3.6));
-                    break;
-                case GAIN_INC_KEY:
-                    simulator.tx_gain = sdr_set_gain(simulator.tx_gain + 1);
-                    gui_status_wprintw(GREEN, "Gain: %ddB.\r", simulator.tx_gain);
-                    break;
-                case GAIN_DEC_KEY:
-                    simulator.tx_gain = sdr_set_gain(simulator.tx_gain - 1);
-                    gui_status_wprintw(GREEN, "Gain: %ddB.\r", simulator.tx_gain);
-                    break;
-                default:
-                    if (is_info_shown) {
-                        gui_show_panel(INFO, OFF);
-                        is_info_shown = false;
-                    }
-                    if (is_help_shown) {
-                        gui_show_panel(HELP, OFF);
-                        is_help_shown = false;
-                    }
-                    break;
+        if (ch != -1)
+        {
+            switch (ch)
+            {
+            case 'x':
+            case 'X':
+                simulator.main_exit = true;
+                break;
+            case 'i':
+            case 'I':
+                gui_show_panel(INFO, ON);
+                is_info_shown = true;
+                break;
+            case '?':
+            case 'h':
+            case 'H':
+                gui_show_panel(HELP, ON);
+                is_help_shown = true;
+                break;
+            case 9: // TAB
+                gui_toggle_current_panel();
+                break;
+            case 265: // F1
+                gui_top_panel(TRACK);
+                break;
+            case 266: // F2
+                gui_top_panel(LS_FIX);
+                break;
+            case 267: // F3
+                gui_top_panel(KF_FIX);
+                break;
+            case LEFT_KEY:
+                simulator.target.bearing -= 127.0;
+                if (simulator.target.bearing < 0)
+                    simulator.target.bearing = 360000.0;
+                if (simulator.target.bearing > 360000)
+                    simulator.target.bearing = 0;
+                gui_show_heading((float)(simulator.target.bearing / 1000));
+                break;
+            case RIGHT_KEY:
+                simulator.target.bearing += 127.0;
+                if (simulator.target.bearing < 0)
+                    simulator.target.bearing = 360000.0;
+                if (simulator.target.bearing > 360000)
+                    simulator.target.bearing = 0;
+                gui_show_heading((float)(simulator.target.bearing / 1000));
+                break;
+            case UP_KEY:
+                simulator.target.vertical_speed += 1;
+                gui_show_vertical_speed((float)simulator.target.vertical_speed);
+                break;
+            case DOWN_KEY:
+                simulator.target.vertical_speed -= 1;
+                gui_show_vertical_speed((float)simulator.target.vertical_speed);
+                break;
+            case UPSPEED_KEY:
+                simulator.target.speed += 1.0;
+                simulator.target.velocity = simulator.target.speed / 100.0;
+                gui_show_speed((float)(simulator.target.velocity * 3.6));
+                break;
+            case DOWNSPEED_KEY:
+                simulator.target.speed -= 1.0;
+                if (simulator.target.speed < 0)
+                    simulator.target.speed = 0;
+                simulator.target.velocity = simulator.target.speed / 100.0;
+                gui_show_speed((float)(simulator.target.velocity * 3.6));
+                break;
+            case GAIN_INC_KEY:
+                simulator.tx_gain = sdr_set_gain(simulator.tx_gain + 1);
+                gui_status_wprintw(GREEN, "Gain: %ddB.\r", simulator.tx_gain);
+                break;
+            case GAIN_DEC_KEY:
+                simulator.tx_gain = sdr_set_gain(simulator.tx_gain - 1);
+                gui_status_wprintw(GREEN, "Gain: %ddB.\r", simulator.tx_gain);
+                break;
+            case CODE_PHASE_RATE_INC_KEY:
+                simulator.target.drift_rate += (double)1 / TX_SAMPLERATE;
+                gui_status_wprintw(GREEN, "Code Phase change rate:  %f s/s.\r", simulator.target.drift_rate);
+                break;
+            case CODE_PHASE_RATE_DEC_KEY:
+                simulator.target.drift_rate -= (double)1 / TX_SAMPLERATE;
+                gui_status_wprintw(GREEN, "Code Phase change rate:  %f s/s.\r", simulator.target.drift_rate);
+                break;
+            default:
+                if (is_info_shown)
+                {
+                    gui_show_panel(INFO, OFF);
+                    is_info_shown = false;
+                }
+                if (is_help_shown)
+                {
+                    gui_show_panel(HELP, OFF);
+                    is_help_shown = false;
+                }
+                break;
             }
         }
     }
@@ -416,4 +605,3 @@ int main(int argc, char** argv) {
     cleanup_and_exit(EXIT_SUCCESS);
     return (EXIT_SUCCESS);
 }
-

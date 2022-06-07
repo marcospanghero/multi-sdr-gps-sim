@@ -14,7 +14,7 @@
 #define ALMANAC_H
 
 #include <curl/curl.h>
-#include "gps.h"
+#include "gps-core.h"
 
 #define ALMANAC_DOWNLOAD_SEM_URL "https://www.celestrak.com/GPS/almanac/SEM/almanac.sem.txt"
 

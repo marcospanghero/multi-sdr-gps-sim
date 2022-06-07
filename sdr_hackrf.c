@@ -18,7 +18,7 @@
 #include <sys/types.h> 
 /* for PRIX64 */
 #include <inttypes.h>
-#include <hackrf.h>
+#include <libhackrf/hackrf.h>
 #include "gui.h"
 #include "fifo.h"
 #include "sdr.h"
@@ -212,7 +212,7 @@ int sdr_hackrf_init(simulator_t *simulator) {
         return -1;
     }
 
-    if (!fifo_create(NUM_FIFO_BUFFERS, HACKRF_TRANSFER_BUFFER_SIZE, sizeof (signed char))) {
+    if (!fifo_create(NUM_FIFO_BUFFERS, HACKRF_LIME_TRANSFER_BUFFER_SIZE, sizeof (signed char))) {
         gui_status_wprintw(RED, "Error creating TX fifo!");
         return -1;
     }

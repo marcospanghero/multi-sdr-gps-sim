@@ -1,0 +1,145 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <time.h>
+#include <pthread.h>
+#include "sdr.h"
+#include "gui.h"
+#include "gps-sim.h"
+#include "serial.h"
+
+#include <gps.h>
+#include <math.h>   // for isfinite()
+#include <unistd.h> // for sleep()
+
+#define BYTE_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c"
+#define BYTE_TO_BINARY(byte)       \
+    (byte & 0x80 ? '1' : '0'),     \
+        (byte & 0x40 ? '1' : '0'), \
+        (byte & 0x20 ? '1' : '0'), \
+        (byte & 0x10 ? '1' : '0'), \
+        (byte & 0x08 ? '1' : '0'), \
+        (byte & 0x04 ? '1' : '0'), \
+        (byte & 0x02 ? '1' : '0'), \
+        (byte & 0x01 ? '1' : '0')
+
+static const int gui_y_offset = 4;
+static const int gui_x_offset = 2;
+
+static void print_fix(struct gps_data_t *gpsdata)
+{
+
+    gui_mvwprintw(SERIAL, gui_y_offset, gui_x_offset, "TOWt: %d:%d Time: %d Lat: %f - Lon %f", gpsdata->fix.timegps.weekn, gpsdata->fix.timegps, gpsdata->fix.time.tv_sec, gpsdata->fix.latitude, gpsdata->fix.longitude);
+    if (0 != isfinite(gpsdata->fix.altHAE))
+    {
+        gui_mvwprintw(SERIAL, gui_y_offset + 1, gui_x_offset, "ELE: %f", gpsdata->fix.altHAE);
+    }
+
+    gui_mvwprintw(SERIAL, gui_y_offset + 2, gui_x_offset, "Status: %d", gpsdata->fix.status);
+    switch (gpsdata->fix.mode)
+        {
+        case MODE_3D:
+            gui_mvwprintw(SERIAL, gui_y_offset + 2, gui_x_offset + 20, "Mode 3D");
+            break;
+        case MODE_2D:
+            gui_mvwprintw(SERIAL, gui_y_offset + 2, gui_x_offset + 20, "Mode 2D");
+            break;
+        case MODE_NO_FIX:
+            gui_mvwprintw(SERIAL, gui_y_offset + 2, gui_x_offset + 20, "NOFIX");
+            break;
+        default:
+            // don't print anything if no fix indicator
+            break;
+        };
+    
+    if (MODE_NO_FIX < gpsdata->fix.mode &&
+        0 < gpsdata->satellites_used)
+    {
+        gui_mvwprintw(SERIAL, gui_y_offset + 4, gui_x_offset, "SATS: %d", gpsdata->satellites_used);
+    }
+    if (0 != isfinite(gpsdata->dop.hdop))
+    {
+        gui_mvwprintw(SERIAL, gui_y_offset + 5, gui_x_offset, "HDOP: %f", gpsdata->dop.hdop);
+    }
+    if (0 != isfinite(gpsdata->dop.vdop))
+    {
+        gui_mvwprintw(SERIAL, gui_y_offset + 6, gui_x_offset, "VDOP: %f", gpsdata->dop.vdop);
+    }
+    if (0 != isfinite(gpsdata->dop.pdop))
+    {
+        gui_mvwprintw(SERIAL, gui_y_offset + 7, gui_x_offset, "PDOP: %f", gpsdata->dop.pdop);
+    }
+}
+
+static void conditionally_log_fix(struct gps_data_t *gpsdata)
+{
+    print_fix(gpsdata);
+    /* Is this a subframe packet that we are interested in capturing?*/
+    gui_mvwprintw(SERIAL, gui_y_offset + 18, gui_x_offset, "%s", gps_maskdump(gpsdata->set));
+}
+
+void *gps_serial_thread_ep(void *arg)
+{
+
+    unsigned int flags = WATCH_ENABLE | WATCH_JSON;
+    struct fixsource_t source;
+    source.server = (char *)"localhost";
+    source.port = (char *)3333;
+
+    simulator_t *simulator = (simulator_t *)(arg);
+    thread_to_core(2);
+    set_thread_name("gps-serial-thread");
+
+    if (0 != gps_open("localhost", "3333", &(simulator->fixdata)))
+    {
+        gui_status_wprintw(RED, "Open error.  Bye, bye\n");
+        goto end_gps_thread;
+    }
+
+    if (0 > gps_stream(&(simulator->fixdata), flags, NULL))
+    {
+        gui_status_wprintw(RED, "Stream error! killing process\n");
+        goto end_gps_thread;
+    }
+
+    while (simulator->gps_serial_thread_exit == false)
+    {
+        if (simulator->gps_serial_thread_running == false)
+        {
+            simulator->gps_serial_thread_running = true;
+            pthread_cond_signal(&(simulator->gps_serial_init_done));
+            gui_status_wprintw(GREEN, "Started loop\n");
+        }
+        if (gps_waiting(&simulator->fixdata, 5 * 1000000))
+        {
+            gps_read(&simulator->fixdata, NULL, 0);
+            conditionally_log_fix(&simulator->fixdata);
+            
+            
+        }
+        else
+        {
+            gui_status_wprintw(RED, "Stream error! nothing avb\n");
+        }
+    }
+
+    // while (gps_mainloop(&simulator->fixdata, 5 * 1000000,
+    //                         conditionally_log_fix) > 0)
+    // {
+    //     gui_status_wprintw(RED, "External Fix mode: %d\n",&simulator->fixdata.fix.mode ); /*WAIT until we have a proper external set fix*/
+
+    //     if (simulator->gps_thread_exit)
+    //     {
+    //         goto end_gps_thread;
+    //     }
+    // }
+
+end_gps_thread:
+    gui_status_wprintw(RED, "Exit Serial thread\n");
+    simulator->gps_serial_thread_exit = true;
+    (void)gps_stream(&simulator->fixdata, WATCH_DISABLE, NULL);
+    (void)gps_close(&simulator->fixdata);
+    pthread_cond_signal(&(simulator->gps_serial_init_done));
+    pthread_exit(NULL);
+}

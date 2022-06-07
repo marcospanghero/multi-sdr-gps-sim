@@ -18,7 +18,7 @@
 #include <sys/types.h> 
 /* for PRIX64 */
 #include <inttypes.h>
-#include <hackrf.h>
+#include <libhackrf/hackrf.h>
 #include "gui.h"
 #include "fifo.h"
 #include "sdr.h"
